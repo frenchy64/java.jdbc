@@ -10,7 +10,7 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :source-paths ["src/main/clojure"]
   :test-paths ["src/test/clojure"]
-  :dependencies [[org.clojure/clojure "1.9.0-alpha9"]
+  :dependencies [[org.clojure/clojure "1.9.0-alpha13"]
                  ;; These are just the versions most recently test against
                  ;; for your own projects, use whatever version is most
                  ;; appropriate for you. Again, note that this project.clj
@@ -26,7 +26,12 @@
                  [org.xerial/sqlite-jdbc "3.8.11.2"]
                  ;; if you have the MS driver in your local repo
                  [sqljdbc4 "4.0"]
+                 [org.clojure/core.typed "0.3.29-SNAPSHOT"]
+
                  ]
+  :injections [(require 'clojure.core.typed)
+               (clojure.core.typed/install)]
+  :repl-options {:timeout 300000}
   :profiles {:1.4 {:dependencies [[org.clojure/clojure "1.4.0"]]}
              :1.5 {:dependencies [[org.clojure/clojure "1.5.1"]]}
              :1.6 {:dependencies [[org.clojure/clojure "1.6.0"]]}

@@ -38,7 +38,9 @@ generated keys are returned (as a map).
 
 For more documentation, see:
 
-http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html" }
+http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html" 
+      :lang :core.typed
+      :core.typed {:features #{:runtime-infer}}}
   clojure.java.jdbc
   (:import [java.net URI]
            [java.sql BatchUpdateException DriverManager
@@ -46,7 +48,8 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html" }
            [java.util Hashtable Map Properties]
            [javax.sql DataSource])
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [clojure.core.typed :as t]))
 
 (defn as-sql-name
   "Given a naming strategy function and a keyword or string, return
