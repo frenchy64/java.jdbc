@@ -25,12 +25,17 @@
             [clojure.java.jdbc :as sql]
             [clojure.string :as str]))
 
-(try
-  (require 'clojure.java.jdbc.spec)
-  (require 'clojure.spec.test)
-  ((resolve 'clojure.spec.test/instrument) 'clojure.java.jdbc)
-  (println "Instrumenting clojure.java.jdbc with clojure.spec")
-  (catch Exception _))
+(def with-spec? (try
+                  (require 'clojure.java.jdbc.spec)
+                  (require 'clojure.spec.test)
+                  ;; require this to workaround rebinding of report multi-fn
+                  (require 'clojure.test.check.clojure-test)
+                  (let [syms ((resolve 'clojure.spec.test/enumerate-namespace) 'clojure.java.jdbc)]
+                    ((resolve 'clojure.spec.test/instrument) syms))
+                  (println "Instrumenting clojure.java.jdbc with clojure.spec")
+                  true
+                  (catch Exception _
+                    false)))
 
 ;; Set test-databases according to whether you have the local database available:
 ;; Possible values so far: [:mysql :postgres :derby :hsqldb :mysql-str :postgres-str]
@@ -59,16 +64,16 @@
 
 ;; database connections used for testing:
 
-(def mysql-db {:subprotocol "mysql"
-               :subname "//127.0.0.1:3306/clojure_test"
-               :user "clojure_test"
+(def mysql-db {:dbtype   "mysql"
+               :dbname   "clojure_test"
+               :user     "clojure_test"
                :password "clojure_test"})
 
 (def derby-db {:dbtype "derby"
                :dbname "clojure_test_derby"
                :create true})
 
-(def hsqldb-db {:dbtype "hsqldb"
+(def hsqldb-db {:dbtype "hsql"
                 :dbname "clojure_test_hsqldb"})
 
 (def h2-db {:dbtype "h2"
@@ -77,19 +82,25 @@
 (def sqlite-db {:dbtype "sqlite"
                 :dbname "clojure_test_sqlite"})
 
-(def postgres-db {:subprotocol "postgresql"
-                  :subname (str "//" postgres-host ":" postgres-port "/clojure_test")
-                  :user "clojure_test"
+(def postgres-db {:dbtype   "postgres"
+                  :dbname   "clojure_test"
+                  :host     postgres-host
+                  :port     postgres-port
+                  :user     "clojure_test"
                   :password "clojure_test"})
 
-(def mssql-db {:subprotocol "sqlserver"
-               :subname (str "//" mssql-host ":" mssql-port ";DATABASENAME=" mssql-dbname)
-               :user mssql-user
+(def mssql-db {:dbtype   "mssql"
+               :dbname   mssql-dbname
+               :host     mssql-host
+               :port     mssql-port
+               :user     mssql-user
                :password mssql-pass})
 
-(def jtds-db {:subprotocol "jtds:sqlserver"
-              :subname (str "//" jtds-host ":" jtds-port "/" jtds-dbname)
-              :user jtds-user
+(def jtds-db {:dbtype   "jtds"
+              :dbname   jtds-dbname
+              :host     jtds-host
+              :port     jtds-port
+              :user     jtds-user
               :password jtds-pass})
 
 ;; To test against the stringified DB connection settings:
@@ -115,7 +126,7 @@
     (doseq [table [:fruit :fruit2 :veggies :veggies2]]
       (try
         (sql/db-do-commands db (sql/drop-table-ddl table))
-        (catch Exception _
+        (catch java.sql.SQLException _
           ;; ignore
           ))))
   (t))
@@ -134,12 +145,13 @@
 (defn- hsqldb? [db]
   (if (string? db)
     (re-find #"hsqldb:" db)
-    (= "hsqldb" (or (:subprotocol db) (:dbtype db)))))
+    (#{"hsql" "hsqldb"} (or (:subprotocol db) (:dbtype db)))))
 
 (defn- mssql? [db]
   (if (string? db)
     (re-find #"sqlserver" db)
-    (re-find #"sqlserver" (or (:subprotocol db) (:dbtype db)))))
+    (#{"jtds" "jtds:sqlserver" "mssql" "sqlserver"}
+     (or (:subprotocol db) (:dbtype db)))))
 
 (defn- mysql? [db]
   (if (string? db)
@@ -149,7 +161,7 @@
 (defn- postgres? [db]
   (if (string? db)
     (re-find #"postgres" db)
-    (= "postgresql" (or (:subprotocol db) (:dbtype db)))))
+    (re-find #"postgres" (or (:subprotocol db) (:dbtype db)))))
 
 (defmulti create-test-table
   "Create a standard test table. Uses db-do-commands.
@@ -196,6 +208,9 @@
         [:grade :real]]
        {:table-spec ""})))
 
+(deftest test-drop-table-ddl
+  (is (= "DROP TABLE something" (sql/drop-table-ddl :something))))
+
 (deftest test-uri-spec-parsing
   (is (= {:advanced "false" :ssl "required" :password "clojure_test"
           :user "clojure_test" :subname "//localhost/clojure_test"
@@ -211,41 +226,41 @@
            "mysql://clojure_test:clojure_test@localhost:3306/clojure_test")))))
 
 (defn- returned-key [db k]
-  (condp = (or (:subprotocol db) (:dbtype db))
+  (case (or (:subprotocol db) (:dbtype db))
     "derby"  {(keyword "1") nil}
-    "hsqldb" nil
+    ("hsql" "hsqldb") nil
     "h2"     nil
     "mysql"  {:generated_key k}
     nil      (if (mysql? db) ; string-based tests
                {:generated_key k}
                k)
-    "jtds:sqlserver" {:id nil}
-    "sqlserver" {:generated_keys nil}
+    ("jtds" "jtds:sqlserver") {:id nil}
+    ("mssql" "sqlserver") {:generated_keys nil}
     "sqlite" {(keyword "last_insert_rowid()") k}
     k))
 
 (defn- select-key [db]
-  (condp = (or (:subprotocol db) (:dbtype db))
-    "postgresql" :id
+  (case (or (:subprotocol db) (:dbtype db))
+    ("postgres" "postgresql") :id
     identity))
 
 (defn- generated-key [db k]
-  (condp = (or (:subprotocol db) (:dbtype db))
+  (case (or (:subprotocol db) (:dbtype db))
     "derby" 0
-    "hsqldb" 0
+    ("hsql" "hsqldb") 0
     "h2" 0
-    "jtds:sqlserver" 0
-    "sqlserver" 0
+    ("jtds" "jtds:sqlserver") 0
+    ("mssql" "sqlserver") 0
     "sqlite" 0
     k))
 
 (defn- float-or-double [db v]
-  (condp = (or (:subprotocol db) (:dbtype db))
+  (case (or (:subprotocol db) (:dbtype db))
     "derby" (Float. v)
     "h2" (Float. v)
-    "jtds:sqlserver" (Float. v)
-    "sqlserver" (Float. v)
-    "postgresql" (Float. v)
+    ("jtds" "jtds:sqlserver") (Float. v)
+    ("mssql" "sqlserver") (Float. v)
+    ("postgres" "postgresql") (Float. v)
     v))
 
 (deftest test-create-table
@@ -460,7 +475,7 @@
 (deftest execute-with-prepared-statement-return-keys
   (doseq [db (test-specs)]
     ;; Derby/SQL Server does not have auto-generated id column which we're testing here
-    (when-not (#{"derby" "jtds:sqlserver"} (or (:subprotocol db) (:dbtype db)))
+    (when-not (#{"derby" "jtds" "jtds:sqlserver"} (or (:subprotocol db) (:dbtype db)))
       (create-test-table :fruit db)
       (sql/with-db-connection [conn db]
         (let [connection (:connection conn)
@@ -762,7 +777,7 @@
              (sql/metadata-query (.getTables metadata
                                              nil nil nil
                                              (into-array ["TABLE" "VIEW"]))
-                                 {:row-fn (comp clojure.string/lower-case :table_name)
+                                 {:row-fn (comp clojure.string/lower-case str :table_name)
                                   :result-set-fn first}))))))
 
 (deftest test-metadata
@@ -830,6 +845,12 @@
       (is (= [{:fruit/id (generated-key db 1) :fruit/name "Apple" :fruit/appearance nil
                :fruit/grade nil :fruit/cost nil}]
              (sql/query db ["SELECT * FROM fruit"] {:qualifier "fruit"})))
+      (is (= [{:fruit/name "Apple"}]
+             (sql/query db ["SELECT name FROM fruit"]
+                        {:identifiers (comp (partial str "fruit/") str/lower-case)})))
+      (is (= [{:name "Apple"}]
+             (sql/query db ["SELECT name FROM fruit"]
+                        {:identifiers (comp keyword str/lower-case)})))
       (is (= [{:fruit/id (generated-key db 1) :fruit/name "Apple" :fruit/appearance nil
                :fruit/grade nil :fruit/cost nil}]
              (sql/query (assoc db :qualifier "fruit") ["SELECT * FROM fruit"])))
@@ -943,7 +964,9 @@
     (is (thrown? IllegalArgumentException (sql/insert! db {:name "Apple"} [:name])))
     (is (thrown? IllegalArgumentException (sql/insert! db {:name "Apple"} [:name] {:entities identity})))
     (is (thrown? IllegalArgumentException (sql/insert! db [:name])))
-    (is (thrown? ClassCastException (sql/insert! db [:name] {:entities identity})))))
+    (if with-spec? ; clojure.spec catches this differently
+      (is (thrown? clojure.lang.ExceptionInfo (sql/insert! db [:name] {:entities identity})))
+      (is (thrown? ClassCastException (sql/insert! db [:name] {:entities identity}))))))
 
 (deftest test-execute!-fails-with-multi-param-groups
   (doseq [db (test-specs)]

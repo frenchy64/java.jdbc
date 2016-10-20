@@ -16,7 +16,7 @@ Additional documentation can be found in the [java.jdbc section of clojure-doc.o
 Releases and Dependency Information
 ========================================
 
-Latest stable release: 0.6.2-alpha1
+Latest stable release: 0.6.2-alpha3
 
 * [All Released Versions](http://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22org.clojure%22%20AND%20a%3A%22java.jdbc%22)
 
@@ -24,14 +24,14 @@ Latest stable release: 0.6.2-alpha1
 
 [Leiningen](https://github.com/technomancy/leiningen) dependency information:
 ```clojure
-[org.clojure/java.jdbc "0.6.2-alpha1"]
+[org.clojure/java.jdbc "0.6.2-alpha3"]
 ```
 [Maven](http://maven.apache.org/) dependency information:
 ```xml
 <dependency>
   <groupId>org.clojure</groupId>
   <artifactId>java.jdbc</artifactId>
-  <version>0.6.2-alpha1</version>
+  <version>0.6.2-alpha3</version>
 </dependency>
 ```
 You will also need to add dependencies for the JDBC driver you intend to use. Here are links (to Maven Central) for each of the common database drivers that clojure.java.jdbc is known to be used with:
@@ -55,14 +55,30 @@ Example Usage
 ```clojure
 (require '[clojure.java.jdbc :as j])
 
-(def mysql-db {:subprotocol "mysql"
-               :subname "//127.0.0.1:3306/clojure_test"
+;; there are many ways to write a db-spec but the easiest way is to
+;; use :dbtype and then provide the :dbname and any of :user, :password,
+;; :host, :port, and other options as needed:
+(def mysql-db {:dbtype "mysql"
+               :dbname "clojure_test"
                :user "clojure_test"
                :password "clojure_test"})
 
-(j/insert! mysql-db :fruit
-  {:name "Apple" :appearance "rosy" :cost 24}
-  {:name "Orange" :appearance "round" :cost 49})
+(def pg-db {:dbtype "postgresql"
+            :dbname "mypgdatabase"
+            :host "mydb.server.com"
+            :user "myuser"
+            :password "secret"
+            :ssl true
+            :sslfactory "org.postgresql.ssl.NonValidatingFactory"})
+
+;; you can also specify a full connection string if you'd prefer:
+(def pg-uri
+  {:connection-uri (str "postgresql://myuser:secret@mydb.server.com:5432/mypgdatabase"
+                        "?ssl=true&sslfactory=org.postgresql.ssl.NonValidatingFactory")})
+
+(j/insert-multi! mysql-db :fruit
+  [{:name "Apple" :appearance "rosy" :cost 24}
+   {:name "Orange" :appearance "round" :cost 49}])
 ;; ({:generated_key 1} {:generated_key 2})
 
 (j/query mysql-db
@@ -103,6 +119,15 @@ Developer Information
 
 Change Log
 ====================
+
+* Release 0.6.2-alpha3 on 2016-08-25
+  * Fixed bad interaction between `:qualifier` and existing `:identifiers` functionality [JDBC-140](http://dev.clojure.org/jira/browse/JDBC-140).
+  * Updated the README and docstrings to reflect that `:dbtype` is the easiest / preferred way to write `db-spec` maps [JDBC-139](http://dev.clojure.org/jira/browse/JDBC-139).
+  * Fixed postgres / postgresql alias support [JDBC-138](http://dev.clojure.org/jira/browse/JDBC-138).
+    This also adds aliases for mssql (sqlserver), jtds (jtds:sqlserver), oracle (oracle:thin), and hsql (hsqldb).
+
+* Release 0.6.2-alpha2 on 2016-07-21
+  * Update `clojure.spec` support to work with Clojure 1.9.0 Alpha 10.
 
 * Release 0.6.2-alpha1 on 2016-07-05
   * Experimental support for `clojure.spec` via the new `clojure.java.jdbc.spec` namespace. Requires Clojure 1.9.0 Alpha 8 (or later).

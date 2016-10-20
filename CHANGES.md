@@ -1,3 +1,21 @@
+Changes coming in 0.7.0-alpha1 -- potentially breaking changes
+
+* The signatures of `as-sql-name` and `quoted` have changed slightly: the former no longer has the curried (single argument) version, and the latter no longer has the two argument version. This change came out of a discussion on Slack which indicated curried functions are non-idiomatic. If you relied on the curried version of `as-sql-name`, you will not need to use `partial`. If you relied on the two argument version of `quoted`, you will need to add an extra `( )` for the one argument call. I'd be fairly surprised if anyone is using `as-sql-name` at all since it is really an implementation detail. I'd also be surprised if anyone was using the two argument version of `quoted` since the natural usage is `:entities (quoted [\[ \]])` to create a naming strategy (that provides SQL entity quoting).
+* Added `get-isolation-level` to return the current transaction's isolation level, if any [JDBC-141](http://dev.clojure.org/jira/browse/JDBC-141).
+* Added support for `read-columns` option to allow more flexible customization of reading column values from a result set (particularly in a multi-database application). Also expands `set-parameters` support to options (previously it was just part of the db-spec) [JDBC-137](http://dev.clojure.org/jira/browse/JDBC-137).
+* Expanded optional `clojure.spec` coverage to almost the whole library API.
+
+Changes in 0.6.2-alpha3
+
+* Fixed bad interaction between `:qualifier` and existing `:identifiers` functionality [JDBC-140](http://dev.clojure.org/jira/browse/JDBC-140).
+* Updated the README and docstrings to reflect that `:dbtype` is the easiest / preferred way to write `db-spec` maps [JDBC-139](http://dev.clojure.org/jira/browse/JDBC-139).
+* Fixed postgres / postgresql alias support [JDBC-138](http://dev.clojure.org/jira/browse/JDBC-138).
+  This also adds aliases for mssql (sqlserver), jtds (jtds:sqlserver), oracle (oracle:thin), and hsql (hsqldb).
+
+Changes in 0.6.2-alpha2
+
+* Updates to `clojure.spec` support to work properly with Clojure 1.9.0 Alpha 10.
+
 Changes in 0.6.2-alpha1
 
 * Experimental support for `clojure.spec` via the new `clojure.java.jdbc.spec` namespace. Requires Clojure 1.9.0 Alpha 8 (or later).

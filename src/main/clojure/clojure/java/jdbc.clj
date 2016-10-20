@@ -42,14 +42,15 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
       :lang :core.typed
       :core.typed {:features #{:runtime-infer}}}
   clojure.java.jdbc
-  (:import [java.net URI]
-           [java.sql BatchUpdateException DriverManager
-            PreparedStatement ResultSet SQLException Statement Types]
-           [java.util Hashtable Map Properties]
-           [javax.sql DataSource])
-  (:require [clojure.string :as str]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.walk :as walk]
-            [clojure.core.typed :as t]))
+            [clojure.core.typed :as t])
+  (:import (java.net URI)
+           (java.sql BatchUpdateException DriverManager
+                     PreparedStatement ResultSet SQLException Statement Types)
+           (java.util Hashtable Map Properties)
+           (javax.sql DataSource)))
 
 (defn as-sql-name
   "Given a naming strategy function and a keyword or string, return
@@ -58,31 +59,26 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
    and each are turned into strings via the naming strategy and then
    joined back together so x.y might become `x`.`y` if the naming
    strategy quotes identifiers with `."
-  ([f]
-   (fn [x]
-     (as-sql-name f x)))
-  ([f x]
-   (let [n (name x)
-         i (.indexOf n (int \.))]
-     (if (= -1 i)
-       (f n)
-       (str/join "." (map f (.split n "\\.")))))))
+  [f x]
+  (let [n (name x)
+        i (.indexOf n (int \.))]
+    (if (= -1 i)
+      (f n)
+      (str/join "." (map f (.split n "\\."))))))
 
 (defn quoted
-  "With a single argument, returns a naming strategy function that quotes
-   names. The single argument can either be a single character or a vector
-   pair of characters.
-   Can also be called with two arguments - a quoting argument and a name -
-   and returns the fully quoted string:
-     (quoted \\` \"foo\") will return \"`foo`\"
-     (quoted [\\[ \\]] \"foo\") will return \"[foo]\""
-  ([q]
-   (fn [x]
-     (quoted q x)))
-  ([q x]
-   (if (vector? q)
-     (str (first q) x (last q))
-     (str q x q))))
+  "Given a (vector) pair of delimiters (characters or strings), return a naming
+  strategy function that will quote SQL entities with them.
+  Given a single delimiter, treat it as a (vector) pair of that delimiter.
+    ((quoted [\\[ \\]]) \"foo\") will return \"[foo]\" -- for MS SQL Server
+    ((quoted \\`') \"foo\") will return \"`foo`\" -- for MySQL
+  Intended to be used with :entities to provide a quoting (naming) strategy that
+  is appropriate for your database."
+  [q]
+  (if (vector? q)
+    (fn [x]
+      (str (first q) x (last q)))
+    (quoted [q q])))
 
 (defn- table-str
   "Transform a table spec to an entity name for SQL. The table spec may be a
@@ -146,19 +142,23 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   (get-level [_] 0))
 
 (def ^{:private true :doc "Map of classnames to subprotocols"} classnames
-  {"postgresql"     "org.postgresql.Driver"
-   "mysql"          "com.mysql.jdbc.Driver"
-   "sqlserver"      "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+  {"derby"          "org.apache.derby.jdbc.EmbeddedDriver"
+   "h2"             "org.h2.Driver"
+   "hsqldb"         "org.hsqldb.jdbcDriver"
    "jtds:sqlserver" "net.sourceforge.jtds.jdbc.Driver"
+   "mysql"          "com.mysql.jdbc.Driver"
    "oracle:oci"     "oracle.jdbc.OracleDriver"
    "oracle:thin"    "oracle.jdbc.OracleDriver"
-   "derby"          "org.apache.derby.jdbc.EmbeddedDriver"
-   "hsqldb"         "org.hsqldb.jdbcDriver"
-   "h2"             "org.h2.Driver"
-   "sqlite"         "org.sqlite.JDBC"})
+   "postgresql"     "org.postgresql.Driver"
+   "sqlite"         "org.sqlite.JDBC"
+   "sqlserver"      "com.microsoft.sqlserver.jdbc.SQLServerDriver"})
 
 (def ^{:private true :doc "Map of schemes to subprotocols"} subprotocols
-  {"postgres" "postgresql"})
+  {"hsql"     "hsqldb"
+   "jtds"     "jtds:sqlserver"
+   "mssql"    "sqlserver"
+   "oracle"   "oracle:thin"
+   "postgres" "postgresql"})
 
 (defn- parse-properties-uri [^URI uri]
   (let [host (.getHost uri)
@@ -198,21 +198,7 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   parameters but can also be a URI or a String. The various possibilities are described
   below:
 
-  Existing Connection:
-    :connection  (required) an existing open connection that can be used
-                 but cannot be closed (only the parent connection can be closed)
-
-  Factory:
-    :factory     (required) a function of one argument, a map of params
-    (others)     (optional) passed to the factory function in a map
-
-  DriverManager:
-    :subprotocol (required) a String, the jdbc subprotocol
-    :subname     (required) a String, the jdbc subname
-    :classname   (optional) a String, the jdbc driver class name
-    (others)     (optional) passed to the driver as properties.
-
-  DriverManager (alternative):
+  DriverManager (preferred):
     :dbtype      (required) a String, the type of the database (the jdbc subprotocol)
     :dbname      (required) a String, the name of the database
     :host        (optional) a String, the host name/IP of the database
@@ -220,6 +206,26 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
     :port        (optional) a Long, the port of the database
                             (defaults to 3306 for mysql, 1433 for mssql/jtds, else nil)
     (others)     (optional) passed to the driver as properties.
+
+  Raw:
+    :connection-uri (required) a String
+                 Passed directly to DriverManager/getConnection
+
+  Other formats accepted:
+
+  Existing Connection:
+    :connection  (required) an existing open connection that can be used
+                 but cannot be closed (only the parent connection can be closed)
+
+  DriverManager (alternative / legacy style):
+    :subprotocol (required) a String, the jdbc subprotocol
+    :subname     (required) a String, the jdbc subname
+    :classname   (optional) a String, the jdbc driver class name
+    (others)     (optional) passed to the driver as properties.
+
+  Factory:
+    :factory     (required) a function of one argument, a map of params
+    (others)     (optional) passed to the factory function in a map
 
   DataSource:
     :datasource  (required) a javax.sql.DataSource
@@ -232,14 +238,10 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
     :name        (required) a String or javax.naming.Name
     :environment (optional) a java.util.Map
 
-  Raw:
-    :connection-uri (required) a String
-                 Passed directly to DriverManager/getConnection
+  java.net.URI:
+    Parsed JDBC connection string (see java.lang.String format next)
 
-  URI:
-    Parsed JDBC connection string - see below
-
-  String:
+  java.lang.String:
     subprotocol://user:password@host:post/subname
                  An optional prefix of jdbc: is allowed."
   ^java.sql.Connection
@@ -268,23 +270,26 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
     (DriverManager/getConnection connection-uri)
 
     (and subprotocol subname)
-    (let [url (format "jdbc:%s:%s" subprotocol subname)
+    (let [;; allow aliases for subprotocols
+          subprotocol (subprotocols subprotocol subprotocol)
+          url (format "jdbc:%s:%s" subprotocol subname)
           etc (dissoc db-spec :classname :subprotocol :subname)
           classname (or classname (classnames subprotocol))]
       (clojure.lang.RT/loadClassForName classname)
       (DriverManager/getConnection url (as-properties etc)))
 
     (and dbtype dbname)
-    (let [subprotocol dbtype
+    (let [;; allow aliases for dbtype
+          subprotocol (subprotocols dbtype dbtype)
           host (or host "127.0.0.1")
           port (or port (condp = subprotocol
-                          "mysql" 3306
-                          "mssql" 1433
-                          "jtds"  1433
-                          "postgresql" 5432
+                          "jtds:sqlserver" 1433
+                          "mysql"          3306
+                          "postgresql"     5432
+                          "sqlserver"      1433
                           nil))
-          db-sep (if (= "mssql" subprotocol) ";DATABASENAME=" "/")
-          url (if (#{"derby" "hsqldb" "h2" "sqlite"} subprotocol)
+          db-sep (if (= "sqlserver" subprotocol) ";DATABASENAME=" "/")
+          url (if (#{"derby" "h2" "hsqldb" "sqlite"} subprotocol)
                 (str "jdbc:" subprotocol ":" dbname)
                 (str "jdbc:" subprotocol "://" host
                      (when port (str ":" port))
@@ -364,6 +369,13 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   (set-parameter [_ ^PreparedStatement s ^long i]
     (.setObject s i (sql-value nil))))
 
+(defn- dft-set-parameters
+  "Default implementation of parameter setting for the given statement."
+  [stmt params]
+  (dorun (map-indexed (fn [ix value]
+                        (set-parameter value stmt (inc ix)))
+                      params)))
+
 (defprotocol IResultSetReadColumn
   "Protocol for reading objects from the java.sql.ResultSet. Default
    implementations (for Object and nil) return the argument, and the
@@ -382,6 +394,12 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   nil
   (result-set-read-column [_1 _2 _3] nil))
 
+(defn- dft-read-columns
+  "Default implementation of reading row values from result set, given the
+  result set metadata and the indices."
+  [^ResultSet rs rsmeta idxs]
+  (mapv (fn [^Integer i] (result-set-read-column (.getObject rs i) rsmeta i)) idxs))
+
 (defn result-set-seq
   "Creates and returns a lazy sequence of maps corresponding to the rows in the
   java.sql.ResultSet rs. Loosely based on clojure.core/resultset-seq but it
@@ -393,16 +411,20 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   keywords. The default is to convert them to lower case.
   The :qualifier option specifies the namespace qualifier for those identifiers."
   ([rs] (result-set-seq rs {}))
-  ([^ResultSet rs {:keys [as-arrays? identifiers qualifier]
-                   :or {identifiers str/lower-case}}]
+  ([^ResultSet rs {:keys [as-arrays? identifiers qualifier read-columns]
+                   :or {identifiers str/lower-case
+                        read-columns dft-read-columns}}]
    (let [rsmeta (.getMetaData rs)
          idxs (range 1 (inc (.getColumnCount rsmeta)))
          col-name-fn (if (= :cols-as-is as-arrays?) identity make-cols-unique)
+         identifier-fn (if qualifier
+                         (comp (partial keyword qualifier) identifiers)
+                         (comp keyword identifiers))
          keys (->> idxs
-                   (map (fn [^Integer i] (.getColumnLabel rsmeta i)))
+                   (mapv (fn [^Integer i] (.getColumnLabel rsmeta i)))
                    col-name-fn
-                   (map (comp (partial keyword qualifier) identifiers)))
-         row-values (fn [] (map (fn [^Integer i] (result-set-read-column (.getObject rs i) rsmeta i)) idxs))
+                   (mapv identifier-fn))
+         row-values (fn [] (read-columns rs rsmeta idxs))
          ;; This used to use create-struct (on keys) and then struct to populate each row.
          ;; That had the side effect of preserving the order of columns in each row. As
          ;; part of JDBC-15, this was changed because structmaps are deprecated. We don't
@@ -502,13 +524,6 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
      (when timeout (.setQueryTimeout stmt timeout))
      stmt)))
 
-(defn- set-parameters
-  "Add the parameters to the given statement."
-  [stmt params]
-  (dorun (map-indexed (fn [ix value]
-                        (set-parameter value stmt (inc ix)))
-                      params)))
-
 (defn print-sql-exception
   "Prints the contents of an SQLException to *out*"
   [^SQLException exception]
@@ -578,13 +593,27 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   [db]
   (deref (:rollback db)))
 
-(def ^{:private true :doc "Transaction isolation levels."}
+(def ^:private
   isolation-levels
+  "Transaction isolation levels."
   {:none             java.sql.Connection/TRANSACTION_NONE
    :read-committed   java.sql.Connection/TRANSACTION_READ_COMMITTED
    :read-uncommitted java.sql.Connection/TRANSACTION_READ_UNCOMMITTED
    :repeatable-read  java.sql.Connection/TRANSACTION_REPEATABLE_READ
    :serializable     java.sql.Connection/TRANSACTION_SERIALIZABLE})
+
+(def ^:private isolation-kws
+  "Map transaction isolation constants to our keywords."
+  (set/map-invert isolation-levels))
+
+(defn get-isolation-level
+  "Given a db-spec (with an optional connection), return the current
+  transaction isolation level, if known. Return nil if there is no
+  active connection in the db-spec. Return :unknown if we do not
+  recognize the isolation level."
+  [db]
+  (when-let [con (db-find-connection db)]
+    (isolation-kws (.getTransactionIsolation con) :unknown)))
 
 (defn db-transaction*
   "Evaluates func as a transaction on the open database connection. Any
@@ -694,8 +723,11 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   :row-fn,and :result-set-fn to control how the ResultSet is transformed and
   returned. See query for more details."
   ([rs-or-value] (metadata-result rs-or-value {}))
-  ([rs-or-value {:keys [as-arrays? identifiers qualifier result-set-fn row-fn]
-                 :or {identifiers str/lower-case row-fn identity}}]
+  ([rs-or-value {:keys [as-arrays? identifiers qualifier read-columns
+                        result-set-fn row-fn]
+                 :or {identifiers str/lower-case
+                      read-columns dft-read-columns
+                      row-fn identity}}]
    (let [result-set-fn (or result-set-fn (if as-arrays? vec doall))]
      (if (instance? java.sql.ResultSet rs-or-value)
        ((^{:once true} fn* [rs]
@@ -705,7 +737,8 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
                           (map row-fn rs))))
         (result-set-seq rs-or-value {:as-arrays? as-arrays?
                                      :identifiers identifiers
-                                     :qualifier qualifier}))
+                                     :qualifier qualifier
+                                     :read-columns read-columns}))
        rs-or-value))))
 
 (defmacro metadata-query
@@ -745,8 +778,8 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   "Executes a PreparedStatement, optionally in a transaction, and (attempts to)
   return any generated keys."
   [db ^PreparedStatement stmt param-group {:keys [transaction?] :as opts}]
-  ((or (:set-parameters db) set-parameters) stmt param-group)
-  (let [exec-and-return-keys
+  (let [opts (merge (when (map? db) db) opts)
+        exec-and-return-keys
         (^{:once true} fn* []
          (let [counts (.executeUpdate stmt)]
            (try
@@ -759,6 +792,7 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
              (catch Exception _
                ;; assume generated keys is unsupported and return counts instead:
                counts))))]
+    ((:set-parameters opts dft-set-parameters) stmt param-group)
     (if transaction?
       (with-db-transaction [t-db (add-connection db (.getConnection stmt))]
         (exec-and-return-keys))
@@ -796,20 +830,21 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
 
 (defn- db-do-execute-prepared-statement
   "Execute a PreparedStatement, optionally in a transaction."
-  [db ^PreparedStatement stmt param-groups {:keys [transaction?]}]
-  (if (empty? param-groups)
-    (if transaction?
-      (with-db-transaction [t-db (add-connection db (.getConnection stmt))]
-        (vector (.executeUpdate stmt)))
-      (vector (.executeUpdate stmt)))
-    (do
-      (doseq [param-group param-groups]
-        ((or (:set-parameters db) set-parameters) stmt param-group)
-        (.addBatch stmt))
+  [db ^PreparedStatement stmt param-groups {:keys [transaction?] :as opts}]
+  (let [opts (merge (when (map? db) db) opts)]
+    (if (empty? param-groups)
       (if transaction?
         (with-db-transaction [t-db (add-connection db (.getConnection stmt))]
-          (execute-batch stmt))
-        (execute-batch stmt)))))
+          (vector (.executeUpdate stmt)))
+        (vector (.executeUpdate stmt)))
+      (do
+        (doseq [param-group param-groups]
+          ((:set-parameters opts dft-set-parameters) stmt param-group)
+          (.addBatch stmt))
+        (if transaction?
+          (with-db-transaction [t-db (add-connection db (.getConnection stmt))]
+            (execute-batch stmt))
+          (execute-batch stmt))))))
 
 (defn db-do-prepared
   "Executes an (optionally parameterized) SQL prepared statement on the
@@ -848,7 +883,7 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
    (let [opts (merge (when (map? db) db) opts)
          [sql & params] (if (sql-stmt? sql-params) (vector sql-params) (vec sql-params))
          run-query-with-params (^{:once true} fn* [^PreparedStatement stmt]
-                                ((or (:set-parameters db) set-parameters) stmt params)
+                                ((:set-parameters opts dft-set-parameters) stmt params)
                                 (with-open [rset (.executeQuery stmt)]
                                   (func rset)))]
      (when-not (sql-stmt? sql)
@@ -889,8 +924,9 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
   ([db sql-params] (query db sql-params {}))
   ([db sql-params opts]
    (let [{:keys [as-arrays? explain? explain-fn identifiers qualifier
-                 result-set-fn row-fn] :as opts}
-         (merge {:explain-fn println :identifiers str/lower-case :row-fn identity}
+                 read-columns result-set-fn row-fn] :as opts}
+         (merge {:explain-fn println :identifiers str/lower-case
+                 :read-columns dft-read-columns :row-fn identity}
                 (when (map? db) db)
                 opts)
          result-set-fn (or result-set-fn (if as-arrays? vec doall))
@@ -912,7 +948,8 @@ http://clojure-doc.org/articles/ecosystem/java_jdbc/home.html"
                                                   (map row-fn rs))))
                                 (result-set-seq rset {:as-arrays? as-arrays?
                                                       :identifiers identifiers
-                                                      :qualifier qualifier})))
+                                                      :qualifier qualifier
+                                                      :read-columns read-columns})))
                               opts))))
 
 (defn- direction
